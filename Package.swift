@@ -17,8 +17,12 @@ let package = Package(
     ],
     targets: [
         .binaryTarget(
-            name: "_Differentiation", 
+            name: "_Differentiation",
             path: "_Differentiation.xcframework"
-        )
+        ),
+        .testTarget(
+            name: "DifferentiationTests",
+            dependencies: ["_Differentiation"]
+        ),
     ]
 )
