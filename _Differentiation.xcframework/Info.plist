@@ -6,13 +6,13 @@
 	<array>
 		<dict>
 			<key>BinaryPath</key>
-			<string>libswift_Differentiation.a</string>
-			<key>SwiftModulesPath</key>
-			<string>_Differentiation.swiftmodule</string>
+			<string>_Differentiation.framework/Versions/A/_Differentiation</string>
 			<key>LibraryIdentifier</key>
 			<string>macos-arm64</string>
 			<key>LibraryPath</key>
-			<string>libswift_Differentiation.a</string>
+			<string>_Differentiation.framework</string>
+			<key>DebugSymbolsPath</key>
+			<string>dSYMs</string>
 			<key>SupportedArchitectures</key>
 			<array>
 				<string>arm64</string>
@@ -22,13 +22,29 @@
 		</dict>
 		<dict>
 			<key>BinaryPath</key>
-			<string>libswift_Differentiation.a</string>
-			<key>SwiftModulesPath</key>
-			<string>_Differentiation.swiftmodule</string>
+			<string>_Differentiation.framework/_Differentiation</string>
+			<key>LibraryIdentifier</key>
+			<string>ios-arm64</string>
+			<key>LibraryPath</key>
+			<string>_Differentiation.framework</string>
+			<key>DebugSymbolsPath</key>
+			<string>dSYMs</string>
+			<key>SupportedArchitectures</key>
+			<array>
+				<string>arm64</string>
+			</array>
+			<key>SupportedPlatform</key>
+			<string>ios</string>
+		</dict>
+		<dict>
+			<key>BinaryPath</key>
+			<string>_Differentiation.framework/_Differentiation</string>
 			<key>LibraryIdentifier</key>
 			<string>ios-arm64-simulator</string>
 			<key>LibraryPath</key>
-			<string>libswift_Differentiation.a</string>
+			<string>_Differentiation.framework</string>
+			<key>DebugSymbolsPath</key>
+			<string>dSYMs</string>
 			<key>SupportedArchitectures</key>
 			<array>
 				<string>arm64</string>
@@ -37,22 +53,6 @@
 			<string>ios</string>
 			<key>SupportedPlatformVariant</key>
 			<string>simulator</string>
-		</dict>
-		<dict>
-			<key>BinaryPath</key>
-			<string>libswift_Differentiation.a</string>
-			<key>SwiftModulesPath</key>
-			<string>_Differentiation.swiftmodule</string>
-			<key>LibraryIdentifier</key>
-			<string>ios-arm64</string>
-			<key>LibraryPath</key>
-			<string>libswift_Differentiation.a</string>
-			<key>SupportedArchitectures</key>
-			<array>
-				<string>arm64</string>
-			</array>
-			<key>SupportedPlatform</key>
-			<string>ios</string>
 		</dict>
 	</array>
 	<key>CFBundlePackageType</key>
