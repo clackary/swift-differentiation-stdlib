@@ -1,7 +1,7 @@
 // swift-interface-format-version: 1.0
-// swift-compiler-version: Apple Swift version 6.3 effective-5.10 (swiftlang-6.3.0.123.5 clang-2100.0.123.102)
-// swift-module-flags: -target arm64-apple-macos26.0 -enable-objc-interop -enable-library-evolution -module-link-name swift_Differentiation -parse-stdlib -static -swift-version 5 -O -library-level api -enforce-exclusivity=unchecked -target-min-inlining-version min -enable-experimental-feature NoncopyableGenerics2 -enable-experimental-feature SuppressedAssociatedTypes -enable-experimental-feature SE427NoInferenceOnExtension -enable-experimental-feature NonescapableTypes -enable-experimental-feature LifetimeDependence -enable-experimental-feature MemberImportVisibility -module-name _Differentiation
-// swift-module-flags-ignorable:  -formal-cxx-interoperability-mode=off -interface-compiler-version 6.3
+// swift-compiler-version: Apple Swift version 6.3.3 effective-5.10 (swiftlang-6.3.3.1.3 clang-2100.1.1.101)
+// swift-module-flags: -target arm64-apple-ios26.0 -enable-objc-interop -enable-library-evolution -module-link-name _Differentiation -parse-stdlib -swift-version 5 -O -library-level api -enforce-exclusivity=unchecked -target-min-inlining-version min -enable-experimental-feature NoncopyableGenerics2 -enable-experimental-feature SuppressedAssociatedTypes -enable-experimental-feature SE427NoInferenceOnExtension -enable-experimental-feature NonescapableTypes -enable-experimental-feature LifetimeDependence -enable-experimental-feature MemberImportVisibility -module-name _Differentiation
+// swift-module-flags-ignorable:  -formal-cxx-interoperability-mode=off -interface-compiler-version 6.3.3
 import Swift
 import SwiftShims
 import tgmath_h
@@ -1730,6 +1730,156 @@ extension Swift.SIMD3 where Scalar == Swift.Double {
     dx * y * pow(x, y - 1) + dy * value * log(x.isLessThanOrEqualTo(0) ? Double(1) : x)
   })
 }
+@available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+extension Swift.Float16 : _Differentiation.Differentiable {
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  public typealias TangentVector = Swift.Float16
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @inlinable public mutating func move(by offset: Swift.Float16.TangentVector) {
+    self += offset
+  }
+}
+@available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+extension Swift.Float16 {
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @derivative(of: init(_:), wrt: x)
+  @inlinable @_transparent internal static func _vjpInit(x: Swift.Float16) -> (value: Swift.Float16, pullback: (Swift.Float16) -> Swift.Float16) {
+    return (value: Float16(x), pullback: { v in Float16(v) })
+  }
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @derivative(of: init(_:), wrt: x)
+  @inlinable @_transparent internal static func _jvpInit(x: Swift.Float16) -> (value: Swift.Float16, differential: (Swift.Float16) -> Swift.Float16) {
+    return (value: Float16(x), differential: { dx in Float16(dx) })
+  }
+  @derivative(of: init(_:), wrt: x)
+  @inlinable @_transparent internal static func _vjpInit(x: Swift.Float) -> (value: Swift.Float16, pullback: (Swift.Float16) -> Swift.Float) {
+    return (value: Float16(x), pullback: { v in Float(v) })
+  }
+  @derivative(of: init(_:), wrt: x)
+  @inlinable @_transparent internal static func _jvpInit(x: Swift.Float) -> (value: Swift.Float16, differential: (Swift.Float) -> Swift.Float16) {
+    return (value: Float16(x), differential: { dx in Float16(dx) })
+  }
+  @derivative(of: init(_:), wrt: x)
+  @inlinable @_transparent internal static func _vjpInit(x: Swift.Double) -> (value: Swift.Float16, pullback: (Swift.Float16) -> Swift.Double) {
+    return (value: Float16(x), pullback: { v in Double(v) })
+  }
+  @derivative(of: init(_:), wrt: x)
+  @inlinable @_transparent internal static func _jvpInit(x: Swift.Double) -> (value: Swift.Float16, differential: (Swift.Double) -> Swift.Float16) {
+    return (value: Float16(x), differential: { dx in Float16(dx) })
+  }
+}
+@available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+extension Swift.Float16 {
+  @derivative(of: -, wrt: x)
+  @inlinable @_transparent internal static func _vjpNegate(x: Swift.Float16) -> (value: Swift.Float16, pullback: (Swift.Float16) -> Swift.Float16) {
+    return (-x, { v in -v })
+  }
+  @derivative(of: -, wrt: x)
+  @inlinable @_transparent internal static func _jvpNegate(x: Swift.Float16) -> (value: Swift.Float16, differential: (Swift.Float16) -> Swift.Float16) {
+    return (-x, { dx in -dx })
+  }
+}
+@available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+extension Swift.Float16 {
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @derivative(of: +, wrt: (lhs, rhs))
+  @inlinable @_transparent internal static func _vjpAdd(lhs: Swift.Float16, rhs: Swift.Float16) -> (value: Swift.Float16, pullback: (Swift.Float16) -> (Swift.Float16, Swift.Float16)) {
+    return (lhs + rhs, { v in (v, v) })
+  }
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @derivative(of: +, wrt: (lhs, rhs))
+  @inlinable @_transparent internal static func _jvpAdd(lhs: Swift.Float16, rhs: Swift.Float16) -> (value: Swift.Float16, differential: (Swift.Float16, Swift.Float16) -> Swift.Float16) {
+    return (lhs + rhs, { (dlhs, drhs) in dlhs + drhs })
+  }
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @derivative(of: +=, wrt: (lhs, rhs))
+  @inlinable @_transparent internal static func _vjpAddAssign(_ lhs: inout Swift.Float16, _ rhs: Swift.Float16) -> (value: Swift.Void, pullback: (inout Swift.Float16) -> Swift.Float16) {
+    lhs += rhs
+    return ((), { v in v })
+  }
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @derivative(of: +=, wrt: (lhs, rhs))
+  @inlinable @_transparent internal static func _jvpAddAssign(_ lhs: inout Swift.Float16, _ rhs: Swift.Float16) -> (value: Swift.Void, differential: (inout Swift.Float16, Swift.Float16) -> Swift.Void) {
+    lhs += rhs
+    return ((), { $0 += $1 })
+  }
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @derivative(of: -, wrt: (lhs, rhs))
+  @inlinable @_transparent internal static func _vjpSubtract(lhs: Swift.Float16, rhs: Swift.Float16) -> (value: Swift.Float16, pullback: (Swift.Float16) -> (Swift.Float16, Swift.Float16)) {
+    return (lhs - rhs, { v in (v, -v) })
+  }
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @derivative(of: -, wrt: (lhs, rhs))
+  @inlinable @_transparent internal static func _jvpSubtract(lhs: Swift.Float16, rhs: Swift.Float16) -> (value: Swift.Float16, differential: (Swift.Float16, Swift.Float16) -> Swift.Float16) {
+    return (lhs - rhs, { (dlhs, drhs) in dlhs - drhs })
+  }
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @derivative(of: -=, wrt: (lhs, rhs))
+  @inlinable @_transparent internal static func _vjpSubtractAssign(_ lhs: inout Swift.Float16, _ rhs: Swift.Float16) -> (value: Swift.Void, pullback: (inout Swift.Float16) -> Swift.Float16) {
+    lhs -= rhs
+    return ((), { v in -v })
+  }
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @derivative(of: -=, wrt: (lhs, rhs))
+  @inlinable @_transparent internal static func _jvpSubtractAssign(_ lhs: inout Swift.Float16, _ rhs: Swift.Float16) -> (value: Swift.Void, differential: (inout Swift.Float16, Swift.Float16) -> Swift.Void) {
+    lhs -= rhs
+    return ((), { $0 -= $1 })
+  }
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @derivative(of: *, wrt: (lhs, rhs))
+  @inlinable @_transparent internal static func _vjpMultiply(lhs: Swift.Float16, rhs: Swift.Float16) -> (value: Swift.Float16, pullback: (Swift.Float16) -> (Swift.Float16, Swift.Float16)) {
+    return (lhs * rhs, { v in (rhs * v, lhs * v) })
+  }
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @derivative(of: *, wrt: (lhs, rhs))
+  @inlinable @_transparent internal static func _jvpMultiply(lhs: Swift.Float16, rhs: Swift.Float16) -> (value: Swift.Float16, differential: (Swift.Float16, Swift.Float16) -> Swift.Float16) {
+    return (lhs * rhs, { (dlhs, drhs) in lhs * drhs + rhs * dlhs })
+  }
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @derivative(of: *=, wrt: (lhs, rhs))
+  @inlinable @_transparent internal static func _vjpMultiplyAssign(_ lhs: inout Swift.Float16, _ rhs: Swift.Float16) -> (value: Swift.Void, pullback: (inout Swift.Float16) -> Swift.Float16) {
+    defer { lhs *= rhs }
+    return ((), { [lhs = lhs] v in
+      let drhs = lhs * v
+      v *= rhs
+      return drhs
+    })
+  }
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @derivative(of: *=, wrt: (lhs, rhs))
+  @inlinable @_transparent internal static func _jvpMultiplyAssign(_ lhs: inout Swift.Float16, _ rhs: Swift.Float16) -> (value: Swift.Void, differential: (inout Swift.Float16, Swift.Float16) -> Swift.Void) {
+    let oldLhs = lhs
+    lhs *= rhs
+    return ((), { $0 = $0 * rhs + oldLhs * $1 })
+  }
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @derivative(of: /, wrt: (lhs, rhs))
+  @inlinable @_transparent internal static func _vjpDivide(lhs: Swift.Float16, rhs: Swift.Float16) -> (value: Swift.Float16, pullback: (Swift.Float16) -> (Swift.Float16, Swift.Float16)) {
+    return (lhs / rhs, { v in (v / rhs, -lhs / (rhs * rhs) * v) })
+  }
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @derivative(of: /, wrt: (lhs, rhs))
+  @inlinable @_transparent internal static func _jvpDivide(lhs: Swift.Float16, rhs: Swift.Float16) -> (value: Swift.Float16, differential: (Swift.Float16, Swift.Float16) -> Swift.Float16) {
+    return (lhs / rhs, { (dlhs, drhs) in dlhs / rhs - lhs / (rhs * rhs) * drhs })
+  }
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @derivative(of: /=, wrt: (lhs, rhs))
+  @inlinable @_transparent internal static func _vjpDivideAssign(_ lhs: inout Swift.Float16, _ rhs: Swift.Float16) -> (value: Swift.Void, pullback: (inout Swift.Float16) -> Swift.Float16) {
+    defer { lhs /= rhs }
+    return ((), { [lhs = lhs] v in
+      let drhs = -lhs / (rhs * rhs) * v
+      v /= rhs
+      return drhs
+    })
+  }
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @derivative(of: /=, wrt: (lhs, rhs))
+  @inlinable @_transparent internal static func _jvpDivideAssign(_ lhs: inout Swift.Float16, _ rhs: Swift.Float16) -> (value: Swift.Void, differential: (inout Swift.Float16, Swift.Float16) -> Swift.Void) {
+    let oldLhs = lhs
+    lhs /= rhs
+    return ((), { $0 = ($0 * rhs - oldLhs * $1) / (rhs * rhs)  })
+  }
+}
 extension Swift.Float : _Differentiation.Differentiable {
   public typealias TangentVector = Swift.Float
   @inlinable public mutating func move(by offset: Swift.Float.TangentVector) {
@@ -1737,6 +1887,16 @@ extension Swift.Float : _Differentiation.Differentiable {
   }
 }
 extension Swift.Float {
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @derivative(of: init(_:), wrt: x)
+  @inlinable @_transparent internal static func _vjpInit(x: Swift.Float16) -> (value: Swift.Float, pullback: (Swift.Float) -> Swift.Float16) {
+    return (value: Float(x), pullback: { v in Float16(v) })
+  }
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @derivative(of: init(_:), wrt: x)
+  @inlinable @_transparent internal static func _jvpInit(x: Swift.Float16) -> (value: Swift.Float, differential: (Swift.Float16) -> Swift.Float) {
+    return (value: Float(x), differential: { dx in Float(dx) })
+  }
   @derivative(of: init(_:), wrt: x)
   @inlinable @_transparent internal static func _vjpInit(x: Swift.Float) -> (value: Swift.Float, pullback: (Swift.Float) -> Swift.Float) {
     return (value: Float(x), pullback: { v in Float(v) })
@@ -1855,6 +2015,16 @@ extension Swift.Double : _Differentiation.Differentiable {
   }
 }
 extension Swift.Double {
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @derivative(of: init(_:), wrt: x)
+  @inlinable @_transparent internal static func _vjpInit(x: Swift.Float16) -> (value: Swift.Double, pullback: (Swift.Double) -> Swift.Float16) {
+    return (value: Double(x), pullback: { v in Float16(v) })
+  }
+  @available(iOS 14.0, tvOS 14.0, watchOS 7.0, *)
+  @derivative(of: init(_:), wrt: x)
+  @inlinable @_transparent internal static func _jvpInit(x: Swift.Float16) -> (value: Swift.Double, differential: (Swift.Float16) -> Swift.Double) {
+    return (value: Double(x), differential: { dx in Double(dx) })
+  }
   @derivative(of: init(_:), wrt: x)
   @inlinable @_transparent internal static func _vjpInit(x: Swift.Float) -> (value: Swift.Double, pullback: (Swift.Double) -> Swift.Float) {
     return (value: Double(x), pullback: { v in Float(v) })
