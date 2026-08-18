@@ -1,0 +1,69 @@
+name: Release
+
+# Manual because the two inputs are decisions, not derivations: which Swift
+# toolchain to build against, and which package version to publish it as.
+# swift-differentiation selects between published versions with
+# #if compiler(...), so the mapping lives there rather than here.
+on:
+  workflow_dispatch:
+    inputs:
+      swift_version:
+        description: "swiftlang/swift tag, e.g. swift-6.3.3-RELEASE or swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-08-01-a"
+        required: true
+        type: string
+      package_version:
+        description: "Package tag to publish, e.g. 603.3.0 or 604.0.0-prerelease-4"
+        required: true
+        type: string
+      dry_run:
+        description: "Build and verify without publishing"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  release:
+    # Needs a macOS runner: the build uses xcodebuild, codesign, dsymutil and
+    # the iOS SDKs.
+    runs-on: macos-15
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # release.sh commits and tags, so it needs a real checkout and a
+          # token with push rights.
+          fetch-depth: 0
+          persist-credentials: true
+
+      # Only swiftly itself is installed here; release.sh derives the toolchain
+      # name from --swift-version and installs it. Keeping that in one place
+      # means the workflow and a local run resolve the toolchain identically.
+      #
+      # vapor/swiftly-action is not an option: it downloads
+      # swiftly-$(uname -m).tar.gz from the linux path regardless of runner OS.
+      - name: Install swiftly
+        run: |
+          curl -fsSL https://download.swift.org/swiftly/darwin/swiftly.pkg -o swiftly.pkg
+          installer -pkg swiftly.pkg -target CurrentUserHomeDirectory
+          ~/.swiftly/bin/swiftly init --assume-yes --quiet-shell-followup
+          echo "$HOME/.swiftly/bin" >> "$GITHUB_PATH"
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Build and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # --repo from the runner context, so a fork's workflow publishes to
+          # the fork rather than upstream.
+          Tools/release.sh \
+            --swift-version "${{ inputs.swift_version }}" \
+            --package-version "${{ inputs.package_version }}" \
+            --repo "${{ github.repository }}" \
+            ${{ inputs.dry_run && '--dry-run' || '' }}
