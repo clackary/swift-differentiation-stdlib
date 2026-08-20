@@ -8,80 +8,34 @@ set -euo pipefail
 
 MODULE_NAME="_Differentiation"
 ORIGINAL_TARGET_NAME="swift_Differentiation"
-MODULE_LINK_NAME="lib_Differentiation"
-
-# The framework bundle name must equal the Swift module name. A module loaded
-# from <Name>.framework/Modules/<Name>.swiftmodule autolinks as
-# `-framework <module name>` (lib/Serialization/ModuleFile.cpp and
-# ScanningLoaders.cpp add a LibraryKind::Framework entry named after the
-# module), so anything else fails to resolve at link time.
-FRAMEWORK_NAME="${MODULE_NAME}"
-
-# Why dynamic slices are packaged as .framework bundles and not loose .dylib
-# files.
-#
-# A loose Swift .dylib in an app's Frameworks/ directory makes App Store
-# validation demand a SwiftSupport/ folder (ITMS-90426). Xcode populates
-# SwiftSupport by copying Swift runtime libraries it finds in the toolchain; this
-# library is not in the toolchain, so nothing is staged and no folder is written,
-# yet validation still requires an entry for it. Nothing can satisfy that, since
-# the folder exists for Apple to substitute its own runtime libraries. A
-# framework bundle is not a loose runtime library, so it is never asked for.
-#
-# Two consequences follow from the bundle shape:
-#
-#   * iOS forbids an embedded __TEXT,__info_plist in a bundled executable
-#     (ITMS-90079). Upstream links one in from
-#     Runtimes/Supplemental/cmake/modules/ResourceEmbedding.cmake, so
-#     generate_plist() is suppressed outright via the vendor Settings.cmake hook.
-#     Identity comes from the bundle's Info.plist file instead, which is also
-#     what codesign reads when signing a bundle.
-#   * The autolink directive has to name the framework; see EFFECTIVE_LINK_NAME.
-#
-# Note that the identity upstream stamps in -- com.apple.dt.runtime.* -- is not
-# itself what triggers any of this. Changing it to a non-Apple identifier was
-# tested and made no difference to ITMS-90426; the packaging shape is what
-# matters, and for ITMS-90079 what matters is that the section exists at all.
 BUNDLE_IDENTIFIER="com.differentiable-swift.differentiation"
 BUNDLE_NAME="Differentiation"
+ORIGINAL_LIBRARY_BASENAME="lib${ORIGINAL_TARGET_NAME}.dylib"
 
-# Empty means "read it from the generated module interface"; see
-# bundle_version_for. Kept as an override because the value is derived rather
-# than fixed, so there needs to be a way to correct a bad derivation.
-BUNDLE_VERSION="${DIFFERENTIATION_BUNDLE_VERSION:-}"
-
-# build_id | output_id | platform | variant | sysroot | deployment | target | CFBundleSupportedPlatforms | layout
+# build_id | output_id | sysroot | deployment | target | CFBundleSupportedPlatforms | layout
 SLICES=(
-  "macosx|macos-arm64|macos||macosx|26.0|arm64-apple-macos26.0|MacOSX|versioned"
-  "iphoneos|ios-arm64|ios||iphoneos|26.0|arm64-apple-ios26.0|iPhoneOS|flat"
-  "iphonesimulator|ios-arm64-simulator|ios|simulator|iphonesimulator|26.0|arm64-apple-ios26.0-simulator|iPhoneSimulator|flat"
+  "macosx|macos-arm64|macosx|26.0|arm64-apple-macos26.0|MacOSX|versioned"
+  "iphoneos|ios-arm64|iphoneos|26.0|arm64-apple-ios26.0|iPhoneOS|flat"
+  "iphonesimulator|ios-arm64-simulator|iphonesimulator|26.0|arm64-apple-ios26.0-simulator|iPhoneSimulator|flat"
 )
 
 # ----------------------------------------------------------------------------
 # Mutable state
 # ----------------------------------------------------------------------------
 
-# Set by parse_arguments; derived values are filled in by configure_derived_names
-# and create_work_dir once the shape and the checkout path are known.
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." >/dev/null && pwd -P)"
 swift_source=""
-output_path="${repo_root}/${MODULE_NAME}.xcframework"
+output_path=""
 keep_work_dir=0
-
-# static | framework
-package_shape="static"
-library_extension="a"
-build_shared_libs="NO"
-
-ORIGINAL_LIBRARY_BASENAME=""
-LIBRARY_BASENAME=""
-EFFECTIVE_LINK_NAME=""
-
+toolchain_path=""
+swiftc_bin=""
+swift_resource_dir=""
+bundle_version=""
 work_dir=""
 stage_dir=""
 build_root=""
 module_cache=""
 vendor_dir=""
+slice_staging=""
 staging_output=""
 staged_differentiation_dir=""
 staged_cmake_lists=""
@@ -106,24 +60,24 @@ warn() {
 usage() {
   cat <<EOF
 Usage:
-  Tools/build-library.sh --swift-source PATH [--framework] [--keep-work-dir]
+  Tools/build-library.sh --swift-source PATH --toolchain PATH [--output PATH]
 
-Builds an ${MODULE_NAME} XCFramework from a swiftlang/swift source tree.
-Replaces ${MODULE_NAME}.xcframework at the repository root, but only once every
-slice has been built and verified.
+Builds an ${MODULE_NAME} XCFramework from a swiftlang/swift source tree and
+verifies it. Writes the result to --output. See Tools/release.sh for publishing
+as a release asset.
 
-Packaging shapes:
-  (default)     Static libraries (.a). Links into the consumer's binary; nothing
-                is embedded, so App Store validation never asks for a
-                SwiftSupport entry.
-  --framework   Dynamic libraries packaged as .framework bundles, each with a
-                dSYM. Use when a consumer needs dynamic linking and has to pass
-                App Store validation. Loose .dylib packaging is not offered: it
-                is rejected with ITMS-90426 and cannot be made to pass.
+Both arguments are required as paths so that the compatibility is explicit,
+rather than an accident of whatever swiftc was on PATH.
+
+Slices are dynamic libraries packaged as .framework bundles, each with a dSYM.
 
 Options:
-  --swift-source PATH  Path to the swiftlang/swift checkout.
-  --framework          Package as .framework slices instead of static ones.
+  --swift-source PATH  swiftlang/swift checkout to build the sources from.
+  --toolchain PATH     swift.org .xctoolchain to build with, e.g.
+                       ~/Library/Developer/Toolchains/swift-6.3.3-RELEASE.xctoolchain.
+  --output PATH        Where to write the XCFramework. Defaults to
+                       <work dir>/${MODULE_NAME}.xcframework, which is deleted on
+                       exit unless --keep-work-dir is given.
   --keep-work-dir      Keep the temporary staging/build directory.
   -h, --help           Show this help.
 
@@ -134,8 +88,7 @@ library never symbolicate.
 
 Framework bundles are stamped with CFBundleIdentifier ${BUNDLE_IDENTIFIER}
 and CFBundleName ${BUNDLE_NAME}; edit the constants at the top of this script to
-change them. CFBundleVersion is read from the generated module interface
-(env: DIFFERENTIATION_BUNDLE_VERSION to override).
+change them. CFBundleVersion comes from the toolchain the build ran with.
 EOF
 }
 
@@ -148,10 +101,6 @@ absolute_existing_dir() {
   [[ -d "$path" ]] || die "directory does not exist: $path"
   cd "$path" >/dev/null
   pwd -P
-}
-
-is_framework() {
-  [[ "$package_shape" == "framework" ]]
 }
 
 slice_field() {
@@ -178,14 +127,26 @@ parse_arguments() {
         swift_source="${1#*=}"
         shift
         ;;
-      --keep-work-dir)
-        keep_work_dir=1
+      --toolchain)
+        [[ $# -ge 2 ]] || die "--toolchain requires a path to an .xctoolchain"
+        toolchain_path="$2"
+        shift 2
+        ;;
+      --toolchain=*)
+        toolchain_path="${1#*=}"
         shift
         ;;
-      --framework)
-        package_shape="framework"
-        library_extension="dylib"
-        build_shared_libs="YES"
+      --output)
+        [[ $# -ge 2 ]] || die "--output requires a path"
+        output_path="$2"
+        shift 2
+        ;;
+      --output=*)
+        output_path="${1#*=}"
+        shift
+        ;;
+      --keep-work-dir)
+        keep_work_dir=1
         shift
         ;;
       -h|--help)
@@ -197,19 +158,39 @@ parse_arguments() {
         ;;
     esac
   done
+
   [[ -n "$swift_source" ]] || die "--swift-source is required"
+  [[ -n "$toolchain_path" ]] || die "--toolchain is required"
 }
 
-require_toolchain() {
+require_tools() {
   require_tool cmake
   require_tool ninja
-  if is_framework; then
-    require_tool install_name_tool
-    require_tool codesign
-    require_tool otool
-    require_tool plutil
-    require_tool dsymutil
-  fi
+  require_tool xcrun
+  require_tool xcodebuild
+  require_tool install_name_tool
+  require_tool otool
+  require_tool plutil
+  require_tool dsymutil
+}
+
+# Pins the compiler for the whole run and reads its standard library location.
+resolve_toolchain() {
+  local toolchain_usr
+
+  toolchain_usr="$(absolute_existing_dir "${toolchain_path}/usr")"
+  swiftc_bin="${toolchain_usr}/bin/swiftc"
+  [[ -x "$swiftc_bin" ]] || die "no swiftc in ${toolchain_path}"
+
+  swift_resource_dir="$("$swiftc_bin" -print-target-info \
+    | grep -o '"runtimeResourcePath": *"[^"]*"' | cut -d'"' -f4)"
+
+  [[ -d "$swift_resource_dir" ]] \
+    || die "runtimeResourcePath does not name a directory: ${swift_resource_dir}"
+
+  log "Compiler:  ${swiftc_bin}"
+  log "Version:   $("$swiftc_bin" -version 2>/dev/null | head -1)"
+  log "Stdlib:    ${swift_resource_dir}"
 }
 
 resolve_swift_source() {
@@ -219,34 +200,6 @@ resolve_swift_source() {
   [[ -d "${swift_source}/Runtimes/Supplemental/Differentiation" ]] || die "missing Runtimes/Supplemental/Differentiation under ${swift_source}"
   [[ -d "${swift_source}/stdlib/public/Differentiation" ]] || die "missing stdlib/public/Differentiation under ${swift_source}"
   [[ -x "${swift_source}/utils/gyb" ]] || die "missing executable utils/gyb under ${swift_source}"
-}
-
-# The link name recorded in the module, which determines the autolink directive
-# consumers get. ScanningLoaders.cpp reads -module-link-name for the *name* and
-# isFramework for the *kind*, so:
-#
-#   loose library  -module-link-name lib_Differentiation -> -llib_Differentiation,
-#                  which is why the packaged file carries the doubled lib prefix.
-#   framework      -module-link-name _Differentiation -> -framework _Differentiation,
-#                  matching _Differentiation.framework.
-#
-# Overriding is required, not optional. Runtimes/Core/cmake/modules/CMakeWorkarounds.cmake
-# hardcodes `-module-link-name <SWIFT_LIBRARY_NAME>` into CMAKE_Swift_CREATE_*_LIBRARY,
-# so every build already passes -module-link-name swift_Differentiation. Simply
-# not injecting leaves that value in place (and would autolink
-# `-framework swift_Differentiation`); the injected option lands later in <FLAGS>
-# and wins.
-configure_derived_names() {
-  ORIGINAL_LIBRARY_BASENAME="lib${ORIGINAL_TARGET_NAME}.${library_extension}"
-  # Static slices autolink as -llib_Differentiation, so the packaged archive has
-  # to carry the Darwin lib prefix twice, as liblib_Differentiation.a.
-  LIBRARY_BASENAME="lib${MODULE_LINK_NAME}.${library_extension}"
-
-  if is_framework; then
-    EFFECTIVE_LINK_NAME="${MODULE_NAME}"
-  else
-    EFFECTIVE_LINK_NAME="${MODULE_LINK_NAME}"
-  fi
 }
 
 cleanup() {
@@ -265,8 +218,7 @@ create_work_dir() {
   build_root="${work_dir}/build"
   module_cache="${work_dir}/module-cache"
   vendor_dir="${work_dir}/vendor"
-  # Slices are assembled here and only moved over ${output_path} once every slice
-  # has been verified, so a failed run leaves the previous xcframework intact.
+  slice_staging="${work_dir}/slices"
   staging_output="${work_dir}/${MODULE_NAME}.xcframework"
   staged_differentiation_dir="${stage_dir}/Runtimes/Supplemental/Differentiation"
   staged_cmake_lists="${staged_differentiation_dir}/CMakeLists.txt"
@@ -276,7 +228,7 @@ create_work_dir() {
 
 stage_sources() {
   log "Staging swift Runtimes under ${stage_dir}"
-  mkdir -p "$stage_dir" "$build_root" "$module_cache" "$staging_output"
+  mkdir -p "$stage_dir" "$build_root" "$module_cache" "$slice_staging"
   cp -R "${swift_source}/Runtimes" "${stage_dir}/Runtimes"
   ln -s "${swift_source}/stdlib" "${stage_dir}/stdlib"
 
@@ -284,45 +236,48 @@ stage_sources() {
   cmake -P "${stage_dir}/Runtimes/Resync.cmake"
 }
 
-# Injects the compile options upstream does not offer a switch for.
-patch_cmake_lists() {
-  local input="$1"
-  local tmp="${input}.tmp"
+# Check for vendor cmake hook from upstream sources
+require_vendor_hooks() {
+  local cmake_lists="$1" hook
 
-  awk -v module_link_name="$EFFECTIVE_LINK_NAME" '
-    {
-      print
-      if ($0 ~ /^  Swift_MODULE_NAME _Differentiation\)$/) {
-        print ""
-        print "target_compile_options(swift_Differentiation PRIVATE"
-        print "  \"\$<\$<COMPILE_LANGUAGE:Swift>:SHELL:-module-link-name " module_link_name ">\")"
-        print "target_compile_options(swift_Differentiation PRIVATE"
-        print "  \"\$<\$<COMPILE_LANGUAGE:Swift>:SHELL:-Xfrontend -empty-abi-descriptor>\")"
-      }
-    }
-  ' "$input" > "$tmp"
-
-  if ! grep -q -- "-module-link-name ${EFFECTIVE_LINK_NAME}" "$tmp"; then
-    rm -f "$tmp"
-    die "failed to patch ${input} with module link name ${EFFECTIVE_LINK_NAME}"
-  fi
-  if ! grep -q -- "-empty-abi-descriptor" "$tmp"; then
-    rm -f "$tmp"
-    die "failed to patch ${input} with -empty-abi-descriptor"
-  fi
-
-  mv "$tmp" "$input"
+  for hook in Settings swift_Differentiation; do
+    grep -q "VENDOR_MODULE_DIR}/${hook}.cmake" "$cmake_lists" \
+      || die "${cmake_lists} no longer includes the ${hook}.cmake vendor hook; upstream changed its extension points"
+  done
 }
 
-# Runtimes/Supplemental/Differentiation/CMakeLists.txt includes
+# Runtimes/Supplemental/Differentiation/CMakeLists.txt offers two vendor hooks,
+# and this writes a file for each. Nothing in the swift checkout is modified.
 #
-#   include("${${PROJECT_NAME}_VENDOR_MODULE_DIR}/Settings.cmake" OPTIONAL)
+#   Settings.cmake              included early, after ResourceEmbedding has
+#                               defined generate_plist() but before it is
+#                               called, so redefining it there suppresses it.
 #
-# early on -- after ResourceEmbedding has been included, so generate_plist()
-# already exists, but before it is called. Redefining the function there
-# suppresses it. Nothing in the swift checkout is modified.
+#   swift_Differentiation.cmake included as the last line of the file, after
+#                               add_library, so the target exists and
+#                               target_compile_options can be set on it.
 write_vendor_module() {
   mkdir -p "$vendor_dir"
+
+  # -module-link-name sets the autolink directive consumers get.
+  # ScanningLoaders.cpp reads it for the *name* and isFramework for the *kind*,
+  # so a framework wants -module-link-name _Differentiation, which autolinks
+  # `-framework _Differentiation` and matches _Differentiation.framework.
+  #
+  # Overriding is required, not optional. Runtimes/Core/cmake/modules/CMakeWorkarounds.cmake
+  # hardcodes `-module-link-name <SWIFT_LIBRARY_NAME>` into
+  # CMAKE_Swift_CREATE_*_LIBRARY, so every build already passes
+  # -module-link-name swift_Differentiation. Simply not injecting leaves that
+  # value in place (and would autolink `-framework swift_Differentiation`); the
+  # injected option lands later in <FLAGS> and wins. verify_module_dir checks
+  # the generated interface for the result.
+  cat > "${vendor_dir}/swift_Differentiation.cmake" <<CMAKE
+# Generated by Tools/build-library.sh -- do not edit by hand.
+target_compile_options(${ORIGINAL_TARGET_NAME} PRIVATE
+  "\$<\$<COMPILE_LANGUAGE:Swift>:SHELL:-module-link-name ${MODULE_NAME}>")
+target_compile_options(${ORIGINAL_TARGET_NAME} PRIVATE
+  "\$<\$<COMPILE_LANGUAGE:Swift>:SHELL:-Xfrontend -empty-abi-descriptor>")
+CMAKE
 
   cat > "${vendor_dir}/Settings.cmake" <<'CMAKE'
 # Generated by Tools/build-library.sh -- do not edit by hand.
@@ -354,24 +309,32 @@ build_slice() {
   local compiler_target="$4"
   local build_dir="${build_root}/${identifier}"
   local -a extra_args=()
+  local stdlib_dir="${swift_resource_dir}/${sysroot}"
+  local swift_flags=""
 
-  if is_framework; then
-    # Debug info, so each slice can carry a dSYM and crash reports from the
-    # library symbolicate. CMAKE_<LANG>_FLAGS is prepended to the per-config
-    # flags, so this adds -g without discarding the Release optimisation
-    # settings. Static slices are linked into the consumer, which produces its
-    # own debug info, so they do not need this.
-    extra_args+=(-DCMAKE_Swift_FLAGS=-g -DCMAKE_C_FLAGS=-g)
-  fi
+  # Compile against the toolchain's standard library rather than the SDK's.
+  [[ -d "${stdlib_dir}/Swift.swiftmodule" ]] \
+    || die "no standard library for ${sysroot} under ${swift_resource_dir}; use a swift.org toolchain"
+  swift_flags="-I ${stdlib_dir}"
+
+  # Debug info, so each slice can carry a dSYM and crash reports from the
+  # library symbolicate. CMAKE_<LANG>_FLAGS is prepended to the per-config
+  # flags, so this adds -g without discarding the Release optimisation
+  # settings.
+  swift_flags="${swift_flags} -g"
+  extra_args+=(-DCMAKE_C_FLAGS=-g)
+
+  extra_args+=("-DCMAKE_Swift_FLAGS=${swift_flags}")
 
   log "Configuring ${identifier}"
   cmake -G Ninja \
     -B "$build_dir" \
     -S "$staged_differentiation_dir" \
+    -DCMAKE_Swift_COMPILER="$swiftc_bin" \
     -DCMAKE_OSX_SYSROOT="$sysroot" \
     -DCMAKE_OSX_DEPLOYMENT_TARGET="$deployment_target" \
     -DCMAKE_OSX_ARCHITECTURES=arm64 \
-    -DBUILD_SHARED_LIBS="$build_shared_libs" \
+    -DBUILD_SHARED_LIBS=YES \
     -DCMAKE_C_COMPILER_TARGET="$compiler_target" \
     -DCMAKE_CXX_COMPILER_TARGET="$compiler_target" \
     -DCMAKE_Swift_COMPILER_TARGET="$compiler_target" \
@@ -387,45 +350,31 @@ build_slice() {
 }
 
 # ----------------------------------------------------------------------------
-# Reading the generated module interface
+# Bundle version
 # ----------------------------------------------------------------------------
 
-collect_interfaces() {
-  local module_dir="$1" found
-  _INTERFACES=()
-  while IFS= read -r -d '' found; do
-    _INTERFACES+=("$found")
-  done < <(find "$module_dir" -name '*.swiftinterface' -print0)
-}
+# CFBundleVersion for the framework bundles.
+#
+# Previously recovered by grepping a generated .swiftinterface, which needed an
+# environment override for when the derivation went wrong. The toolchain is now
+# an explicit input, so ask the compiler instead. CFBundleVersion wants up to
+# three integers, so a snapshot's `6.4.x` becomes `6.4.0`.
+resolve_bundle_version() {
+  local reported
 
-# Reads the Swift version out of a generated interface, e.g.
-# "// swift-compiler-version: Apple Swift version 6.3.3 (swiftlang-...)" -> 6.3.3
-# awk rather than sed|head: exiting on the first match keeps this a single
-# command, so there is no pipeline for pipefail to trip over.
-interface_swift_version() {
-  collect_interfaces "$1"
-  [[ "${#_INTERFACES[@]}" -gt 0 ]] || return 0
-  awk '
-    /^\/\/ swift-compiler-version: Apple Swift version [0-9]/ {
-      match($0, /version [0-9][0-9.]*/)
-      print substr($0, RSTART + 8, RLENGTH - 8)
-      exit
-    }' "${_INTERFACES[0]}"
-}
+  reported="$("$swiftc_bin" -version 2>/dev/null \
+    | sed -n 's/.*version \([0-9][0-9.]*\).*/\1/p' | head -1)"
 
-bundle_version_for() {
-  local module_dir="$1"
-  local version=""
-  if [[ -n "$BUNDLE_VERSION" ]]; then
-    printf '%s' "$BUNDLE_VERSION"
-    return
-  fi
-  version="$(interface_swift_version "$module_dir")"
-  if [[ -z "$version" ]]; then
-    warn "could not read a Swift version from ${module_dir}; using 0.0.0 for CFBundleVersion (set DIFFERENTIATION_BUNDLE_VERSION to override)"
-    version="0.0.0"
-  fi
-  printf '%s' "$version"
+  [[ -n "$reported" ]] \
+    || die "could not read a version from '${swiftc_bin} -version'"
+
+  case "$reported" in
+    *.*.*) bundle_version="$reported" ;;
+    *.*)   bundle_version="${reported}.0" ;;
+    *)     bundle_version="${reported}.0.0" ;;
+  esac
+
+  log "Stamping CFBundleVersion ${bundle_version}"
 }
 
 # ----------------------------------------------------------------------------
@@ -448,7 +397,7 @@ write_framework_info_plist() {
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleExecutable</key>
-	<string>${FRAMEWORK_NAME}</string>
+	<string>${MODULE_NAME}</string>
 	<key>CFBundleIdentifier</key>
 	<string>${BUNDLE_IDENTIFIER}</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -479,36 +428,33 @@ package_framework_slice() {
   local build_dir="$1" slice_dir="$2" cf_platform="$3" min_os="$4" layout="$5"
   local built_library="${build_dir}/${ORIGINAL_LIBRARY_BASENAME}"
   local built_module_dir="${build_dir}/${MODULE_NAME}.swiftmodule"
-  local framework_dir="${slice_dir}/${FRAMEWORK_NAME}.framework"
+  local framework_dir="${slice_dir}/${MODULE_NAME}.framework"
   local binary_dir="$framework_dir"
   local resources_dir="$framework_dir"
   local modules_dir="${framework_dir}/Modules"
-  local install_name="@rpath/${FRAMEWORK_NAME}.framework/${FRAMEWORK_NAME}"
-  local version
+  local install_name="@rpath/${MODULE_NAME}.framework/${MODULE_NAME}"
 
   [[ -f "$built_library" ]] || die "missing built library: ${built_library}"
   [[ -d "$built_module_dir" ]] || die "missing built Swift module directory: ${built_module_dir}"
-
-  version="$(bundle_version_for "$built_module_dir")"
 
   if [[ "$layout" == "versioned" ]]; then
     binary_dir="${framework_dir}/Versions/A"
     resources_dir="${framework_dir}/Versions/A/Resources"
     modules_dir="${framework_dir}/Versions/A/Modules"
-    install_name="@rpath/${FRAMEWORK_NAME}.framework/Versions/A/${FRAMEWORK_NAME}"
+    install_name="@rpath/${MODULE_NAME}.framework/Versions/A/${MODULE_NAME}"
   fi
 
   mkdir -p "$binary_dir" "$resources_dir" "$modules_dir"
-  cp "$built_library" "${binary_dir}/${FRAMEWORK_NAME}"
-  install_name_tool -id "$install_name" "${binary_dir}/${FRAMEWORK_NAME}"
+  cp "$built_library" "${binary_dir}/${MODULE_NAME}"
+  install_name_tool -id "$install_name" "${binary_dir}/${MODULE_NAME}"
   cp -R "$built_module_dir" "${modules_dir}/${MODULE_NAME}.swiftmodule"
   find "${modules_dir}/${MODULE_NAME}.swiftmodule" -name '*.swiftsourceinfo' -delete
-  write_framework_info_plist "${resources_dir}/Info.plist" "$cf_platform" "$min_os" "$version"
+  write_framework_info_plist "${resources_dir}/Info.plist" "$cf_platform" "$min_os" "$bundle_version"
 
   if [[ "$layout" == "versioned" ]]; then
     ( cd "${framework_dir}/Versions" && ln -sfn A Current )
     ( cd "$framework_dir" \
-      && ln -sfn "Versions/Current/${FRAMEWORK_NAME}" "$FRAMEWORK_NAME" \
+      && ln -sfn "Versions/Current/${MODULE_NAME}" "$MODULE_NAME" \
       && ln -sfn Versions/Current/Resources Resources \
       && ln -sfn Versions/Current/Modules Modules )
   fi
@@ -518,33 +464,9 @@ package_framework_slice() {
   # never symbolicate. Extracted before signing, since dsymutil reads the
   # unsigned binary.
   mkdir -p "${slice_dir}/dSYMs"
-  dsymutil "${binary_dir}/${FRAMEWORK_NAME}" \
-    -o "${slice_dir}/dSYMs/${FRAMEWORK_NAME}.framework.dSYM" >/dev/null \
+  dsymutil "${binary_dir}/${MODULE_NAME}" \
+    -o "${slice_dir}/dSYMs/${MODULE_NAME}.framework.dSYM" >/dev/null \
     || die "dsymutil failed for ${slice_dir}"
-
-  # Signs the bundle, which takes identity from the bundle's Info.plist. Must
-  # come after every file is in place, since CodeResources hashes them all.
-  codesign --force --sign - "$framework_dir"
-}
-
-package_static_slice() {
-  local build_dir="$1" slice_dir="$2"
-  local built_library="${build_dir}/${ORIGINAL_LIBRARY_BASENAME}"
-  local built_module_dir="${build_dir}/${MODULE_NAME}.swiftmodule"
-  local packaged_module_dir="${slice_dir}/${MODULE_NAME}.swiftmodule"
-  local packaged_library="${slice_dir}/${LIBRARY_BASENAME}"
-
-  [[ -f "$built_library" ]] || die "missing built library: ${built_library}"
-  [[ -d "$built_module_dir" ]] || die "missing built Swift module directory: ${built_module_dir}"
-
-  mkdir -p "$slice_dir"
-  cp "$built_library" "$packaged_library"
-  cp -R "$built_module_dir" "$packaged_module_dir"
-
-  # Keep compiler-produced binary module artifacts so consumers using the exact
-  # same compiler release can import the prebuilt module instead of rechecking
-  # the textual interface.
-  find "$packaged_module_dir" -name '*.swiftsourceinfo' -delete
 }
 
 copy_slice() {
@@ -552,19 +474,15 @@ copy_slice() {
   local build_identifier output_identifier cf_platform deployment layout
   build_identifier="$(slice_field "$spec" 0)"
   output_identifier="$(slice_field "$spec" 1)"
-  deployment="$(slice_field "$spec" 5)"
-  cf_platform="$(slice_field "$spec" 7)"
-  layout="$(slice_field "$spec" 8)"
+  deployment="$(slice_field "$spec" 3)"
+  cf_platform="$(slice_field "$spec" 5)"
+  layout="$(slice_field "$spec" 6)"
 
   local build_dir="${build_root}/${build_identifier}"
-  local slice_dir="${staging_output}/${output_identifier}"
+  local slice_dir="${slice_staging}/${output_identifier}"
 
   mkdir -p "$slice_dir"
-  if is_framework; then
-    package_framework_slice "$build_dir" "$slice_dir" "$cf_platform" "$deployment" "$layout"
-  else
-    package_static_slice "$build_dir" "$slice_dir"
-  fi
+  package_framework_slice "$build_dir" "$slice_dir" "$cf_platform" "$deployment" "$layout"
 }
 
 # ----------------------------------------------------------------------------
@@ -578,22 +496,18 @@ verify_module_dir() {
 
   [[ -d "$module_dir" ]] || die "missing Swift module directory: ${module_dir}"
 
-  collect_interfaces "$module_dir"
-  [[ "${#_INTERFACES[@]}" -gt 0 ]] || die "no textual Swift interfaces found in ${module_dir}"
+  local -a interfaces=()
+  while IFS= read -r -d '' interface; do
+    interfaces+=("$interface")
+  done < <(find "$module_dir" -name '*.swiftinterface' -print0)
+  [[ "${#interfaces[@]}" -gt 0 ]] || die "no textual Swift interfaces found in ${module_dir}"
 
-  for interface in "${_INTERFACES[@]}"; do
-    # The effective link name must be the one we injected. Upstream's CMake rule
-    # always passes -module-link-name swift_Differentiation, so seeing that value
-    # here means the override did not land -- consumers would autolink the wrong
-    # library (or, in a framework, the wrong framework).
-    if ! grep -q -- "-module-link-name ${EFFECTIVE_LINK_NAME}" "$interface"; then
-      die "${interface} does not contain -module-link-name ${EFFECTIVE_LINK_NAME}"
+  for interface in "${interfaces[@]}"; do
+    if ! grep -q -- "-module-link-name ${MODULE_NAME}" "$interface"; then
+      die "${interface} does not contain -module-link-name ${MODULE_NAME}"
     fi
     if grep -q -- "-module-link-name ${ORIGINAL_TARGET_NAME}" "$interface"; then
       die "${interface} still contains -module-link-name ${ORIGINAL_TARGET_NAME}; the override did not take effect"
-    fi
-    if is_framework && grep -q -- "-module-link-name ${MODULE_LINK_NAME}" "$interface"; then
-      die "${interface} carries the loose-library link name ${MODULE_LINK_NAME}; a framework needs ${MODULE_NAME}"
     fi
   done
 
@@ -602,41 +516,40 @@ verify_module_dir() {
   done < <(find "$module_dir" -name '*.swiftdoc' -print0)
   [[ "$found_swiftdoc" -eq 1 ]] || die "no Swift documentation modules found in ${module_dir}"
 
-  # Warns rather than fails: an interface produced by a non-Xcode toolchain is
-  # still usable by that same toolchain, but Xcode cannot load the binary module
-  # and its rebuild from the interface may fail outright.
+  # One artifact serves both SwiftPM and Xcode consumers, and it has to be the
+  # swift.org-built one: Xcode's compiler can rebuild these declarations from the
+  # generated .swiftinterface, but not the reverse. An Xcode toolchain reports a
+  # swiftlang- build number; seeing one here means the wrong --toolchain was
+  # passed and the artifact would only load for Xcode users.
   producer="$(awk '
     /^\/\/ swift-compiler-version: / {
       sub(/^\/\/ swift-compiler-version: /, "")
       print
       exit
-    }' "${_INTERFACES[0]}")"
+    }' "${interfaces[0]}")"
   case "$producer" in
-    *swiftlang-*) : ;;
     "") warn "no swift-compiler-version recorded in ${module_dir}" ;;
-    *) warn "module built by '${producer}', which is not an Xcode toolchain; Xcode consumers may fail to load it" ;;
+    *swiftlang-*) die "module built by '${producer}', an Xcode toolchain; pass a swift.org --toolchain" ;;
+    *) : ;;
   esac
 }
 
 verify_framework_slice() {
   local slice_dir="$1" layout="$2"
-  local framework_dir="${slice_dir}/${FRAMEWORK_NAME}.framework"
-  # The path the bundle advertises, and the path the Mach-O actually lives at --
-  # identical for a flat bundle, different for a versioned one. Inspect the real
-  # file rather than the symlink so the checks are unambiguous.
-  local binary="${framework_dir}/${FRAMEWORK_NAME}"
+  local framework_dir="${slice_dir}/${MODULE_NAME}.framework"
+  local binary="${framework_dir}/${MODULE_NAME}"
   local real_binary="$binary"
   local info_plist="${framework_dir}/Info.plist"
-  local expected_install_name="@rpath/${FRAMEWORK_NAME}.framework/${FRAMEWORK_NAME}"
+  local expected_install_name="@rpath/${MODULE_NAME}.framework/${MODULE_NAME}"
 
   [[ -d "$framework_dir" ]] || die "missing framework bundle: ${framework_dir}"
 
   if [[ "$layout" == "versioned" ]]; then
-    real_binary="${framework_dir}/Versions/A/${FRAMEWORK_NAME}"
+    real_binary="${framework_dir}/Versions/A/${MODULE_NAME}"
     info_plist="${framework_dir}/Versions/A/Resources/Info.plist"
-    expected_install_name="@rpath/${FRAMEWORK_NAME}.framework/Versions/A/${FRAMEWORK_NAME}"
+    expected_install_name="@rpath/${MODULE_NAME}.framework/Versions/A/${MODULE_NAME}"
     [[ -L "${framework_dir}/Versions/Current" ]] || die "missing Versions/Current symlink in ${framework_dir}"
-    [[ -L "$binary" ]] || die "missing top-level ${FRAMEWORK_NAME} symlink in ${framework_dir}"
+    [[ -L "$binary" ]] || die "missing top-level ${MODULE_NAME} symlink in ${framework_dir}"
     [[ -L "${framework_dir}/Resources" ]] || die "missing top-level Resources symlink in ${framework_dir}"
     [[ -L "${framework_dir}/Modules" ]] || die "missing top-level Modules symlink in ${framework_dir}"
   fi
@@ -655,123 +568,109 @@ verify_framework_slice() {
     die "${real_binary} carries an embedded __info_plist; iOS rejects that with ITMS-90079"
   fi
 
-  codesign --verify "$framework_dir" \
-    || die "code signature does not verify: ${framework_dir}"
-
-  local dsym="${slice_dir}/dSYMs/${FRAMEWORK_NAME}.framework.dSYM"
+  local dsym="${slice_dir}/dSYMs/${MODULE_NAME}.framework.dSYM"
   [[ -d "$dsym" ]] || die "missing dSYM: ${dsym}"
-  [[ -f "${dsym}/Contents/Resources/DWARF/${FRAMEWORK_NAME}" ]] \
+  [[ -f "${dsym}/Contents/Resources/DWARF/${MODULE_NAME}" ]] \
     || die "dSYM has no DWARF binary: ${dsym}"
 
   verify_module_dir "${framework_dir}/Modules/${MODULE_NAME}.swiftmodule"
 }
 
-verify_static_slice() {
-  local slice_dir="$1"
-  local packaged_library="${slice_dir}/${LIBRARY_BASENAME}"
-  local found_binary_module=0
+# Compiles a probe against the packaged slice.
+#
+# Grepping the textual interface cannot catch a module that fails to
+# deserialize: 604.0.0-prerelease-3 passed every interface check here and still
+# could not be imported by the compiler that produced it. Conformances are
+# validated on demand, so `import _Differentiation` alone does not surface it --
+# the probe has to touch one.
+verify_module_imports() {
+  local slice_dir="$1" sysroot="$2" compiler_target="$3"
+  local probe="${work_dir}/probe-${compiler_target}.swift"
+  local object="${work_dir}/probe-${compiler_target}.o"
+  local sdk_path
+  local -a search_flags=()
 
-  [[ -f "$packaged_library" ]] || die "missing packaged library: ${packaged_library}"
+  sdk_path="$(xcrun --sdk "$sysroot" --show-sdk-path 2>/dev/null)" \
+    || die "could not resolve an SDK path for sysroot ${sysroot}"
 
-  while IFS= read -r -d '' _; do
-    found_binary_module=1
-  done < <(find "${slice_dir}/${MODULE_NAME}.swiftmodule" -name '*.swiftmodule' -print0)
-  [[ "$found_binary_module" -eq 1 ]] || die "no binary Swift modules found in ${slice_dir}/${MODULE_NAME}.swiftmodule"
+  cat > "$probe" <<'SWIFT'
+import _Differentiation
 
-  verify_module_dir "${slice_dir}/${MODULE_NAME}.swiftmodule"
+@inline(never)
+func _probeAdditiveArithmetic() -> Array<Double>.DifferentiableView {
+  Array<Double>.DifferentiableView.zero
+}
+
+@inline(never)
+func _probeDifferentiable(_ value: [Double]) -> Array<Double>.DifferentiableView {
+  Array<Double>.DifferentiableView(value)
+}
+SWIFT
+
+  search_flags=(-F "$slice_dir")
+
+  "$swiftc_bin" -c -O \
+    -target "$compiler_target" \
+    -sdk "$sdk_path" \
+    "${search_flags[@]}" \
+    "$probe" -o "$object" \
+    || die "the packaged module in ${slice_dir} cannot be imported; see the compiler error above"
 }
 
 verify_slice() {
   local spec="$1"
-  local output_identifier layout slice_dir
+  local output_identifier layout slice_dir sysroot compiler_target
   output_identifier="$(slice_field "$spec" 1)"
-  layout="$(slice_field "$spec" 8)"
+  sysroot="$(slice_field "$spec" 2)"
+  compiler_target="$(slice_field "$spec" 4)"
+  layout="$(slice_field "$spec" 6)"
   slice_dir="${staging_output}/${output_identifier}"
 
   log "Verifying ${output_identifier}"
 
-  if is_framework; then
-    verify_framework_slice "$slice_dir" "$layout"
-  else
-    verify_static_slice "$slice_dir"
-  fi
+  verify_framework_slice "$slice_dir" "$layout"
+
+  verify_module_imports "$slice_dir" "$sysroot" "$compiler_target"
 }
 
 # ----------------------------------------------------------------------------
 # Output
 # ----------------------------------------------------------------------------
 
-write_info_plist() {
-  local spec output_identifier platform variant layout
-  local library_path binary_path
+# Assembles the packaged slices into the xcframework.
+#
+# xcodebuild writes the top-level Info.plist itself, deriving SupportedPlatform,
+# SupportedPlatformVariant and SupportedArchitectures from each binary's Mach-O
+# load commands, and adding DebugSymbolsPath for every -debug-symbols given.
+create_xcframework() {
+  local spec output_identifier slice_dir
+  local -a args=()
 
-  {
-    cat <<'HEAD'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>AvailableLibraries</key>
-	<array>
-HEAD
+  for spec in "${SLICES[@]}"; do
+    output_identifier="$(slice_field "$spec" 1)"
+    slice_dir="${slice_staging}/${output_identifier}"
 
-    for spec in "${SLICES[@]}"; do
-      output_identifier="$(slice_field "$spec" 1)"
-      platform="$(slice_field "$spec" 2)"
-      variant="$(slice_field "$spec" 3)"
-      layout="$(slice_field "$spec" 8)"
+    args+=(-framework "${slice_dir}/${MODULE_NAME}.framework")
+    # -debug-symbols rejects a relative path; work_dir is absolute.
+    args+=(-debug-symbols "${slice_dir}/dSYMs/${MODULE_NAME}.framework.dSYM")
+  done
 
-      if is_framework; then
-        library_path="${FRAMEWORK_NAME}.framework"
-        binary_path="${FRAMEWORK_NAME}.framework/${FRAMEWORK_NAME}"
-        if [[ "$layout" == "versioned" ]]; then
-          binary_path="${FRAMEWORK_NAME}.framework/Versions/A/${FRAMEWORK_NAME}"
-        fi
-      else
-        library_path="${LIBRARY_BASENAME}"
-        binary_path="${LIBRARY_BASENAME}"
-      fi
+  # The output must not already exist, which is why nothing creates it earlier.
+  xcodebuild -create-xcframework "${args[@]}" -output "$staging_output" \
+    || die "xcodebuild -create-xcframework failed"
 
-      printf '\t\t<dict>\n'
-      printf '\t\t\t<key>BinaryPath</key>\n\t\t\t<string>%s</string>\n' "$binary_path"
-      printf '\t\t\t<key>LibraryIdentifier</key>\n\t\t\t<string>%s</string>\n' "$output_identifier"
-      printf '\t\t\t<key>LibraryPath</key>\n\t\t\t<string>%s</string>\n' "$library_path"
-      if ! is_framework; then
-        printf '\t\t\t<key>SwiftModulesPath</key>\n\t\t\t<string>%s.swiftmodule</string>\n' "$MODULE_NAME"
-      fi
-      if [[ -d "${staging_output}/${output_identifier}/dSYMs" ]]; then
-        printf '\t\t\t<key>DebugSymbolsPath</key>\n\t\t\t<string>dSYMs</string>\n'
-      fi
-      printf '\t\t\t<key>SupportedArchitectures</key>\n\t\t\t<array>\n\t\t\t\t<string>arm64</string>\n\t\t\t</array>\n'
-      printf '\t\t\t<key>SupportedPlatform</key>\n\t\t\t<string>%s</string>\n' "$platform"
-      if [[ -n "$variant" ]]; then
-        printf '\t\t\t<key>SupportedPlatformVariant</key>\n\t\t\t<string>%s</string>\n' "$variant"
-      fi
-      printf '\t\t</dict>\n'
-    done
-
-    cat <<'TAIL'
-	</array>
-	<key>CFBundlePackageType</key>
-	<string>XFWK</string>
-	<key>XCFrameworkFormatVersion</key>
-	<string>1.0</string>
-</dict>
-</plist>
-TAIL
-  } > "${staging_output}/Info.plist"
-
-  if command -v plutil >/dev/null 2>&1; then
-    plutil -lint "${staging_output}/Info.plist" >/dev/null \
-      || die "generated xcframework Info.plist is malformed"
-  fi
+  plutil -lint "${staging_output}/Info.plist" >/dev/null \
+    || die "xcodebuild wrote a malformed Info.plist into ${staging_output}"
 }
 
-# Swaps the finished xcframework into place, keeping the old one until the move
-# has succeeded so a failure here cannot leave the repository without an
-# artifact.
 install_output() {
-  log "Replacing ${output_path}"
+  if [[ -z "$output_path" ]]; then
+    keep_work_dir=1
+    log "Built ${staging_output}"
+    return
+  fi
+
+  log "Writing ${output_path}"
   rm -rf "${output_path}.previous"
   if [[ -e "$output_path" ]]; then
     mv "$output_path" "${output_path}.previous"
@@ -796,31 +695,32 @@ main() {
   local spec
 
   parse_arguments "$@"
-  require_toolchain
+  require_tools
+
+  resolve_toolchain
   resolve_swift_source
-  configure_derived_names
+  resolve_bundle_version
+
   create_work_dir
   stage_sources
 
-  log "Patching staged CMake to emit -module-link-name ${EFFECTIVE_LINK_NAME}"
-  patch_cmake_lists "$staged_cmake_lists"
+  require_vendor_hooks "$staged_cmake_lists"
 
-  if is_framework; then
-    log "Writing vendor module to suppress the embedded __info_plist"
-    write_vendor_module
-  fi
+  log "Writing vendor modules for the link name and the embedded __info_plist"
+  write_vendor_module
 
-  log "Assembling ${package_shape} xcframework in ${staging_output}"
+  log "Building slices in ${slice_staging}"
   for spec in "${SLICES[@]}"; do
     build_slice \
       "$(slice_field "$spec" 0)" \
-      "$(slice_field "$spec" 4)" \
-      "$(slice_field "$spec" 5)" \
-      "$(slice_field "$spec" 6)"
+      "$(slice_field "$spec" 2)" \
+      "$(slice_field "$spec" 3)" \
+      "$(slice_field "$spec" 4)"
     copy_slice "$spec"
   done
 
-  write_info_plist
+  log "Assembling the xcframework in ${staging_output}"
+  create_xcframework
 
   for spec in "${SLICES[@]}"; do
     verify_slice "$spec"
