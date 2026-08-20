@@ -16,9 +16,18 @@ let package = Package(
         ),
     ],
     targets: [
+        // url and checksum are rewritten by Tools/release.sh. The artifact is
+        // published as a release asset rather than committed: SwiftPM verifies
+        // the download against the checksum, so the repository does not have to
+        // carry a binary that changes on every rebuild.
+        //
+        // For local work against a rebuilt xcframework, use
+        //   swift package edit swift-differentiation-stdlib --path <checkout>
+        // in the consuming package.
         .binaryTarget(
             name: "_Differentiation",
-            path: "_Differentiation.xcframework"
+            url: "https://github.com/differentiable-swift/swift-differentiation-stdlib/releases/download/0.0.0/_Differentiation.xcframework.zip",
+            checksum: "0000000000000000000000000000000000000000000000000000000000000000"
         ),
         .testTarget(
             name: "DifferentiationTests",
