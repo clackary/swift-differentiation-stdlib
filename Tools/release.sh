@@ -195,6 +195,13 @@ asset_url() {
     "$repository" "$package_version" "$(asset_name)"
 }
 
+# A hyphen after the numeric core marks a semver prerelease, e.g.
+# 604.0.0-prerelease-4 vs. 603.3.0. Prereleases must not be marked "Latest"
+# on the GitHub releases page.
+is_prerelease() {
+  [[ "$package_version" == *-* ]]
+}
+
 # ----------------------------------------------------------------------------
 # Publish
 # ----------------------------------------------------------------------------
@@ -237,10 +244,16 @@ publish() {
   git -C "$repo_root" tag "$package_version"
   git -C "$repo_root" push --atomic "$remote" HEAD "$package_version"
 
-  gh release create "$package_version" "$zip" \
+  local release_flags=()
+  is_prerelease && release_flags+=(--prerelease)
+
+  if ! gh release create "$package_version" "$zip" \
     --repo "$repository" \
     --title "$package_version" \
-    --notes "Built from swiftlang/swift at \`${swift_version}\`."
+    --notes "Built from swiftlang/swift at \`${swift_version}\`." \
+    "${release_flags[@]}"; then
+    die "gh release create failed for ${package_version}"
+  fi
 
   log "Published ${package_version}"
 }
