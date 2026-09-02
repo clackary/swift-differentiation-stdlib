@@ -69,3 +69,20 @@ Two notes on the arguments:
 
 - `--swift-version` is just a label. It is used to name the asset and in the release notes. There are no hard checks it actually built the artifact, allowing for some customization. It has been necessary in the past to modify compiler sources, due to rare cases when Xcode and open source toolchains disagree about the module causing mismatched SDK failures. Any changes from the tagged swift version should be documented in release notes.
 
+## Layout
+
+```
+_Differentiation.xcframework/
+├── Info.plist                  lists the three slices below
+├── macos-arm64/
+│   ├── _Differentiation.framework/
+│   └── dSYMs/
+├── ios-arm64/
+│   ├── _Differentiation.framework/
+│   └── dSYMs/
+└── ios-arm64-simulator/
+    ├── _Differentiation.framework/
+    └── dSYMs/
+```
+
+`Tools/build-library.sh` builds each slice as a `.framework` bundle with a matching dSYM, then hands them to `xcodebuild -create-xcframework`, which assembles the directory above. xcodebuild names each slice directory itself, deriving the platform, architecture and variant from the binary's Mach-O load commands, and records them in the top-level `Info.plist` along with a `DebugSymbolsPath` pointing at each `dSYMs/`. The macOS framework uses the versioned bundle layout while the iOS ones are flat, which is platform convention rather than a choice the build makes.
