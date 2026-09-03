@@ -22,6 +22,7 @@ work_dir=""
 artifact_path=""
 remote="origin"
 repository=""
+preserve_work_dir=0
 
 # ----------------------------------------------------------------------------
 # Diagnostics
@@ -239,10 +240,24 @@ publish() {
 
   update_manifest "$url" "$checksum"
 
-  git -C "$repo_root" add Package.swift
-  git -C "$repo_root" commit -m "release: ${package_version} (${swift_version})"
-  git -C "$repo_root" tag "$package_version"
-  git -C "$repo_root" push --atomic "$remote" HEAD "$package_version"
+  local pre_release_head
+  pre_release_head="$(git -C "$repo_root" rev-parse HEAD)"
+
+  if ! git -C "$repo_root" add Package.swift \
+    || ! git -C "$repo_root" commit -m "release: ${package_version} (${swift_version})"; then
+    die "failed to commit the manifest update; working tree left as-is to inspect"
+  fi
+
+  if ! git -C "$repo_root" tag "$package_version"; then
+    git -C "$repo_root" reset --hard "$pre_release_head"
+    die "failed to create tag ${package_version}; rolled back the commit"
+  fi
+
+  if ! git -C "$repo_root" push --atomic "$remote" HEAD "$package_version"; then
+    git -C "$repo_root" tag -d "$package_version" >/dev/null 2>&1 || true
+    git -C "$repo_root" reset --hard "$pre_release_head"
+    die "push to ${remote} failed; rolled back the local commit and tag, so nothing was published and the checkout is back where it started. Fix the issue and re-run."
+  fi
 
   local release_flags=()
   is_prerelease && release_flags+=(--prerelease)
@@ -252,7 +267,11 @@ publish() {
     --title "$package_version" \
     --notes "Built from swiftlang/swift at \`${swift_version}\`." \
     "${release_flags[@]}"; then
-    die "gh release create failed for ${package_version}"
+    # The tag and commit are already public at this point, so this can no
+    # longer be undone by resetting local git state -- keep the zip so the
+    # release can be finished by hand without rebuilding.
+    preserve_work_dir=1
+    die "commit and tag ${package_version} are already pushed to ${remote} and can't be safely undone automatically. Fix whatever gh reported, then finish by hand: gh release create ${package_version} ${zip} --repo ${repository} --title ${package_version} --notes '...' ${release_flags[*]:-}. The build was kept at ${work_dir}. Do not re-run this script for ${package_version} -- the tag already exists."
   fi
 
   log "Published ${package_version}"
@@ -281,7 +300,7 @@ main() {
 }
 
 cleanup() {
-  if [[ "$dry_run" -eq 1 ]]; then
+  if [[ "$dry_run" -eq 1 || "$preserve_work_dir" -eq 1 ]]; then
     log "Kept ${work_dir}"
   else
     rm -rf "$work_dir"
