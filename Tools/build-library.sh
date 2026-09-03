@@ -670,6 +670,8 @@ install_output() {
     return
   fi
 
+  mkdir -p "$(dirname "$output_path")"
+
   log "Writing ${output_path}"
   rm -rf "${output_path}.previous"
   if [[ -e "$output_path" ]]; then
